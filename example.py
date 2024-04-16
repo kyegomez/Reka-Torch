@@ -13,4 +13,4 @@ model = Reka(512)  # Creating an instance of the Reka model with input size 512
 
 out = model(text, img, audio, video)  # Forward pass through the model with the input tensors
 
-print(out.shape)  # Printing the shape of the output tensor
+print(out)  # Printing the shape of the output tensor

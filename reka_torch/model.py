@@ -3,7 +3,8 @@ from torch import nn
 from zeta.nn.attention import Attention
 from zeta.nn import FeedForward
 from zeta.nn import audio_to_text, img_to_text, video_to_text
-
+from zeta.nn.modules.simple_rmsnorm import SimpleRMSNorm
+from zeta.nn import OutputHead
 
 class RekaTransformerBlock(nn.Module):
     """
@@ -51,6 +52,9 @@ class RekaTransformerBlock(nn.Module):
             post_act_ln=True,
             swish=True,
         )
+        
+        # Normalization
+        
 
     def forward(self, x):
         """
@@ -66,13 +70,26 @@ class RekaTransformerBlock(nn.Module):
         x, _ = self.attn(x)
         # print(x.shape, skip.shape)
         attended = x + skip
+        normed = SimpleRMSNorm(self.dim)(attended)
 
-        x = self.ffn(attended)
-        x += skip
+        x = self.ffn(normed) + x
+        x = SimpleRMSNorm(self.dim)(x)
         return x
 
 
 class RekaTransformer(nn.Module):
+    """
+    RekaTransformer is a transformer-based model for Reka tasks.
+
+    Args:
+        dim (int): The input dimension.
+        depth (int, optional): The number of transformer blocks. Defaults to 6.
+        dim_head (int, optional): The dimension of each attention head. Defaults to 64.
+        heads (int, optional): The number of attention heads. Defaults to 8.
+        ff_mult (int, optional): The multiplier for the feed-forward layer dimension. Defaults to 4.
+        ff_dropout (float, optional): The dropout probability for the feed-forward layer. Defaults to 0.0.
+    """
+
     def __init__(
         self,
         dim: int,
@@ -103,6 +120,15 @@ class RekaTransformer(nn.Module):
         )
 
     def forward(self, x):
+        """
+        Forward pass of the RekaTransformer.
+
+        Args:
+            x: The input tensor.
+
+        Returns:
+            The output tensor after passing through the transformer blocks.
+        """
         for block in self.blocks:
             x = block(x)
         return x
@@ -133,6 +159,8 @@ class Reka(nn.Module):
         post_modal_transform_norm: bool = True,
         post_fusion_norm: bool = True,
         vocab_size: int = 10000,
+        return_logits: bool = True,
+        return_embeddings: bool = False,
     ):
         super().__init__()
         self.dim = dim
@@ -143,8 +171,21 @@ class Reka(nn.Module):
         self.ff_dropout = ff_dropout
         self.post_modal_transform_norm = post_modal_transform_norm
         self.post_fusion_norm = post_fusion_norm
+        self.return_logits = return_logits
+        self.return_embeddings = return_embeddings
 
-        self.transformer = RekaTransformer(
+        # Encoder
+        self.encoder = RekaTransformer(
+            dim=dim,
+            depth=depth,
+            dim_head=dim_head,
+            heads=heads,
+            ff_mult=ff_mult,
+            ff_dropout=ff_dropout,
+        )
+        
+        # Decoder
+        self.decoder = RekaTransformer(
             dim=dim,
             depth=depth,
             dim_head=dim_head,
@@ -232,6 +273,18 @@ class Reka(nn.Module):
         fused = torch.cat((logits, fused), dim=1)
 
         # Transformer
-        x = self.transformer(fused)
+        
+        x = self.encoder(fused)
+        x = self.decoder(x)
+        
+        
+        if self.return_embeddings:
+            return x
+        if self.return_logits:
+            logits = OutputHead(
+                self.dim,
+                1,
+            )(x)
+        
 
-        return x
+            return logits
